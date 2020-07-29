@@ -14,6 +14,7 @@ module spectramod
     ! Spectra file type definitions
     integer,private,parameter :: tjdx   = 1      ! JCAMP-DX files
     integer,private,parameter :: tmol   = 2      ! Turbomole/xtb vibspectrum files
+    integer,private,parameter :: torca  = 22     ! ORCA format
     integer,private,parameter :: tplain = 3      ! Plain datapoint list (two columns)
     integer,private,parameter :: tplain_theo = 4 ! Plain list of fundamentals
     integer,private,parameter :: tplain_exp  = 5 ! Plain list of equidistant (dx) points
@@ -115,7 +116,7 @@ integer function spec_gettype(fname)
     implicit none
     character(len=*) :: fname
     character(len=128) :: atmp
-    integer :: x, ich
+    integer :: x, ich, io
     logical :: ex
     inquire(file=fname,exist=ex)
     if(.not.ex)then
@@ -123,13 +124,25 @@ integer function spec_gettype(fname)
         return
     endif
     x = tplain
+    ! JCAMP-DX
     if(index(fname,'.jdx').ne.0 .or. index(fname,'.JDX').ne.0)then
        x = tjdx
     endif
     open(newunit=ich,file=fname)
     read(ich,'(a)') atmp
+    ! TUBROMOLE
     if(index(atmp,'$vibrational spectrum').ne.0)then
        x = tmol
+    else
+    ! ORCA    
+        do
+           read(ich,'(a)',iostat=io) atmp
+           if(io<0)exit !EOF
+           if(index(atmp,'$ir_spectrum').ne.0)then
+               x = torca
+               exit
+           endif
+         enddo
     endif
     close(ich)
     spec_gettype = x
@@ -216,6 +229,16 @@ subroutine spec_read(self,fname)
         allocate(self%freq(n),self%ints(n), source = 0.0_wp)
         self%nlines = n
         call rdtmtheo1(n,self%freq,self%ints,fname)
+        self%npeaks = n
+        call self%sort(1,n)
+        call move_alloc(self%freq,self%peakx)
+        call move_alloc(self%ints,self%peaky)
+    case( torca )
+        self%spectype = type_theo
+        call rdorcatheo0(n,fname)
+        allocate(self%freq(n),self%ints(n), source = 0.0_wp)
+        self%nlines = n
+        call rdorcatheo1(n,self%freq,self%ints,fname)
         self%npeaks = n
         call self%sort(1,n)
         call move_alloc(self%freq,self%peakx)
@@ -445,6 +468,81 @@ subroutine rdtmtheo1(nline,freq,ints,fname)
       close(ich)
       return
 end subroutine rdtmtheo1
+
+
+!=================================================================================!
+! How to handle theoretical spectra in the ORCA format
+!
+! subroutine rdorcatheo0 is used to just get the number of valid lines
+! subroutine rdorcatheo1 then reads the values.
+!
+!=================================================================================!
+subroutine rdorcatheo0(nline,fname)
+      implicit none
+      character(len=*),intent(in) :: fname
+      integer,intent(out) :: nline
+      character(len=80) :: a80
+      integer :: nn, k
+      integer :: ich,io
+      real(wp) :: xx(50)
+      nline=0
+      k=0
+      open(newunit=ich,file=fname)
+      do
+         read(ich,'(a)',iostat=io) a80
+         if( io < 0 ) exit !EOF
+         a80 = adjustl(a80)
+         if(a80(1:1)=='#')  cycle !cycle comments
+         if(len_trim(a80)<1)cycle !cycle empty lines
+         if(index(a80,'$ir_spectrum').ne.0)then
+            read(ich,*)k
+           exit 
+         endif    
+      enddo
+      close(ich)
+      nline = k
+      return
+end subroutine rdorcatheo0
+
+subroutine rdorcatheo1(nline,freq,ints,fname)
+      implicit none
+      character(len=*),intent(in) :: fname
+      integer,intent(in) :: nline
+      real(wp),intent(out) :: freq(nline)
+      real(wp),intent(out) :: ints(nline)
+      character(len=80) :: a80
+      integer :: nn, k
+      integer :: ich,io
+      real(wp) :: xx(50)
+      k=0
+      freq=0.0d0
+      ints=0.0d0
+      open(newunit=ich,file=fname)
+      do
+         read(ich,'(a)',iostat=io) a80
+         if( io < 0 ) exit !EOF
+         a80 = adjustl(a80)
+         if(a80(1:1)=='#')  cycle !cycle comments
+         if(len_trim(a80)<1)cycle !cycle empty lines
+         if(index(a80,'$ir_spectrum').ne.0)then
+             read(ich,*) io
+             do
+               read(ich,'(a)',iostat=io) a80
+               if(len_trim(a80)<1)exit
+               if(index(a80,'$').ne.0)exit
+               if(io<0)exit !EOF
+               call sreadl(a80,xx,nn)
+               if(xx(1).gt.1.d-6.and.nn.ge.2) then
+                   k = k + 1
+                   freq(k) = xx(1)
+                   ints(k) = xx(2)
+               endif
+             enddo
+         endif
+      enddo
+      close(ich)
+      return
+end subroutine rdorcatheo1
 
 !=================================================================================!
 ! sreadl is a helper function that splits a string a into floats
