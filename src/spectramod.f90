@@ -394,6 +394,7 @@ subroutine rdjdx1(nline,freq,ints,dx,fname)
             do    
                read(ich,'(a)',iostat=io) a80
                if( io < 0 ) exit !EOF
+               if(index(a80,'##END=').ne.0) exit
                call sreadl(a80,xx,nn)
                do i=2,nn
                   k=k+1
